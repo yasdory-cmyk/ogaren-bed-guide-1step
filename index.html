@@ -942,22 +942,23 @@ img { max-width: 100%; display: block; }
 .vw-bar{display:flex; align-items:center; gap:10px; padding:10px 14px; color:#fff; font-size:13px}
 .vw-idx{font-variant-numeric:tabular-nums; opacity:.8}
 .vw-zoom,.vw-close{
-  margin-left:auto; background:rgba(255,255,255,.12); color:#fff;
-  border:0; border-radius:99px; padding:7px 14px; font-size:13px; font-family:inherit;
+  background:rgba(255,255,255,.14); color:#fff; border:0; border-radius:99px;
+  padding:8px 16px; font-size:13px; font-family:inherit;
 }
-.vw-zoom{margin-left:auto} .vw-close{margin-left:8px}
-.vw-track{
-  flex:1; display:flex; overflow-x:auto; overflow-y:hidden;
-  scroll-snap-type:x mandatory; scrollbar-width:none;
+.vw-zoom{margin-left:auto}
+.vw-stage{
+  flex:1; position:relative; overflow:hidden;
+  touch-action:none; -webkit-user-select:none; user-select:none;
 }
-.vw-track::-webkit-scrollbar{display:none}
+.vw-track{display:flex; height:100%; will-change:transform}
 .vw-slide{
-  flex:0 0 100%; scroll-snap-align:center; display:grid; place-items:center;
-  overflow:auto; padding:6px;
+  flex:0 0 auto; height:100%; display:grid; place-items:center;
+  padding:6px; box-sizing:border-box; overflow:hidden;
 }
-.vw-slide img{max-width:100%; max-height:100%; object-fit:contain}
-.vw.zoom .vw-track{scroll-snap-type:none}
-.vw.zoom .vw-slide img{max-width:none; max-height:none; width:230%}
+.vw-slide img{
+  max-width:100%; max-height:100%; object-fit:contain;
+  will-change:transform; -webkit-user-drag:none; pointer-events:none;
+}
 .vw-hint{text-align:center; color:rgba(255,255,255,.45); font-size:12px; padding:8px 0 14px}
 
 @media (min-width:720px){
@@ -1112,30 +1113,134 @@ img { max-width: 100%; display: block; }
   <div class="vw-bar"><span class="vw-idx" id="vwIdx"></span>
     <button class="vw-zoom" id="vwZoom">확대</button>
     <button class="vw-close" id="vwClose">닫기 ✕</button></div>
-  <div class="vw-track" id="vwTrack"></div>
-  <div class="vw-hint">← 좌우로 넘기기 →</div>
+  <div class="vw-stage" id="vwStage"><div class="vw-track" id="vwTrack"></div></div>
+  <div class="vw-hint" id="vwHint">← 좌우로 넘기기 →</div>
 </div>
 <script>
 (function(){
-  var vw=document.getElementById('vw'), track=document.getElementById('vwTrack'),
-      idx=document.getElementById('vwIdx'), zb=document.getElementById('vwZoom'), shots=[], z=false;
+  var vw=document.getElementById('vw'), stage=document.getElementById('vwStage'),
+      track=document.getElementById('vwTrack'), lab=document.getElementById('vwIdx'),
+      zb=document.getElementById('vwZoom'), hint=document.getElementById('vwHint');
+  var shots=[], n=0, i=0, scale=1, tx=0, ty=0, dragX=0;
+  var pts=new Map(), mode=null, s0=1, t0={x:0,y:0}, d0=0, m0={x:0,y:0}, p0={x:0,y:0}, moved=0;
+  var MAXS=5, ZOOMSTEP=2.6;
+
   function build(){
     shots=[].slice.call(document.querySelectorAll('[data-shot]'));
+    n=shots.length;
     track.innerHTML=shots.map(function(im){
-      return '<div class="vw-slide"><img src="'+im.getAttribute('src')+'" alt=""></div>';}).join('');
+      return '<div class="vw-slide"><img src="'+im.getAttribute('src')+'" alt="" draggable="false"></div>';
+    }).join('');
+    track.style.width=(n*100)+'%';
+    [].forEach.call(track.children, function(s){ s.style.width=(100/n)+'%'; });
   }
-  function label(){ idx.textContent=(Math.round(track.scrollLeft/track.clientWidth)+1)+' / '+shots.length; }
+  function img(){ var s=track.children[i]; return s && s.firstElementChild; }
+  function limits(){
+    var im=img(); if(!im) return {x:0,y:0};
+    var w=im.clientWidth*scale, h=im.clientHeight*scale;
+    return {x:Math.max(0,(w-stage.clientWidth)/2), y:Math.max(0,(h-stage.clientHeight)/2)};
+  }
+  function clamp(){
+    var L=limits();
+    tx=Math.max(-L.x, Math.min(L.x, tx));
+    ty=Math.max(-L.y, Math.min(L.y, ty));
+  }
+  function render(anim){
+    track.style.transition = anim ? 'transform .22s ease' : 'none';
+    track.style.transform='translate3d('+(-i*stage.clientWidth+dragX)+'px,0,0)';
+    [].forEach.call(track.children, function(s, k){
+      var im=s.firstElementChild;
+      im.style.transition = anim ? 'transform .22s ease' : 'none';
+      im.style.transform = (k===i)
+        ? 'translate3d('+tx+'px,'+ty+'px,0) scale('+scale+')' : 'none';
+    });
+    lab.textContent=(i+1)+' / '+n;
+    var z = scale>1.01;
+    zb.textContent = z ? '축소' : '확대';
+    hint.textContent = z ? '끌어서 이동 · 두 손가락으로 축소' : '← 좌우로 넘기기 →';
+  }
+  function reset(){ scale=1; tx=0; ty=0; dragX=0; }
+  function open(k){
+    if(!n) build();
+    i=k; reset(); vw.hidden=false; document.body.style.overflow='hidden';
+    requestAnimationFrame(function(){ render(false); });
+  }
+  function shut(){ vw.hidden=true; document.body.style.overflow=''; reset(); }
+
   document.addEventListener('click', function(ev){
     var im=ev.target.closest('[data-shot]'); if(!im) return;
     if(!shots.length) build();
-    vw.hidden=false; document.body.style.overflow='hidden';
-    track.scrollLeft=shots.indexOf(im)*track.clientWidth; label();
+    open(shots.indexOf(im));
   });
-  track.addEventListener('scroll', label, {passive:true});
-  function shut(){ vw.hidden=true; document.body.style.overflow=''; z=false; vw.classList.remove('zoom'); zb.textContent='확대'; }
   document.getElementById('vwClose').onclick=shut;
-  zb.onclick=function(){ z=!z; vw.classList.toggle('zoom',z); zb.textContent=z?'축소':'확대'; };
-  window.addEventListener('keydown',function(ev){ if(ev.key==='Escape') shut(); });
+  zb.onclick=function(){
+    if(scale>1.01){ reset(); } else { scale=ZOOMSTEP; tx=0; ty=0; }
+    render(true);
+  };
+  window.addEventListener('keydown', function(ev){ if(ev.key==='Escape') shut(); });
+  window.addEventListener('resize', function(){ if(!vw.hidden) render(false); });
+
+  function mid(){
+    var a=Array.from(pts.values());
+    if(a.length<2) return {x:a[0].x, y:a[0].y};
+    return {x:(a[0].x+a[1].x)/2, y:(a[0].y+a[1].y)/2};
+  }
+  function dist(){
+    var a=Array.from(pts.values());
+    return Math.hypot(a[0].x-a[1].x, a[0].y-a[1].y);
+  }
+  stage.addEventListener('pointerdown', function(ev){
+    stage.setPointerCapture(ev.pointerId);
+    pts.set(ev.pointerId, {x:ev.clientX, y:ev.clientY});
+    moved=0;
+    if(pts.size===2){ mode='pinch'; s0=scale; d0=dist(); m0=mid(); t0={x:tx,y:ty}; }
+    else { mode = scale>1.01 ? 'pan' : 'swipe'; p0={x:ev.clientX,y:ev.clientY}; t0={x:tx,y:ty}; dragX=0; }
+  });
+  stage.addEventListener('pointermove', function(ev){
+    if(!pts.has(ev.pointerId)) return;
+    pts.set(ev.pointerId, {x:ev.clientX, y:ev.clientY});
+    if(mode==='pinch' && pts.size>=2){
+      var d=dist(), m=mid();
+      scale=Math.max(1, Math.min(MAXS, s0*d/(d0||1)));
+      tx=t0.x+(m.x-m0.x); ty=t0.y+(m.y-m0.y);
+      if(scale<=1.01){ scale=1; tx=0; ty=0; }
+      clamp(); render(false);
+    } else if(mode==='pan'){
+      tx=t0.x+(ev.clientX-p0.x); ty=t0.y+(ev.clientY-p0.y);
+      moved=Math.abs(ev.clientX-p0.x)+Math.abs(ev.clientY-p0.y);
+      clamp(); render(false);
+    } else if(mode==='swipe'){
+      dragX=ev.clientX-p0.x;
+      if((i===0&&dragX>0)||(i===n-1&&dragX<0)) dragX*=0.35;
+      moved=Math.abs(dragX);
+      render(false);
+    }
+  });
+  function end(ev){
+    if(!pts.has(ev.pointerId)) return;
+    pts.delete(ev.pointerId);
+    if(mode==='swipe'){
+      var w=stage.clientWidth;
+      if(dragX<-w*0.18 && i<n-1) i++;
+      else if(dragX>w*0.18 && i>0) i--;
+      dragX=0; render(true);
+    } else if(mode==='pinch' && pts.size===1){
+      var a=Array.from(pts.entries())[0];
+      mode = scale>1.01 ? 'pan' : 'swipe';
+      p0={x:a[1].x, y:a[1].y}; t0={x:tx,y:ty}; dragX=0;
+      return;
+    } else {
+      render(true);
+    }
+    if(pts.size===0) mode=null;
+  }
+  stage.addEventListener('pointerup', end);
+  stage.addEventListener('pointercancel', end);
+  stage.addEventListener('dblclick', function(ev){
+    ev.preventDefault();
+    if(scale>1.01){ reset(); } else { scale=ZOOMSTEP; }
+    clamp(); render(true);
+  });
 })();
 </script>
 
